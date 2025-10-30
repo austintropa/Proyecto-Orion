@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Panel Admin — Procedimientos Almacenados</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any">
+  <link rel="icon" href="{{ url_for('static', filename='images/favicon.ico') }}" type="image/x-icon">
+  <link rel="shortcut icon" href="{{ url_for('static', filename='images/favicon.ico') }}" type="image/x-icon">
+</head>
+
+<body class="preload">
+  <!-- Loader lento -->
+  <div id="loader" aria-hidden="true">
+    <div class="loader-core">
+      <div class="loader-ring"></div>
+      <div class="loader-dot"></div>
+    </div>
+    <span class="loader-text">Cargando panel…</span>
+  </div>
+
+  <!-- Iluminación del logo (glow) -->
+  <div id="logofx" aria-hidden="true"></div>
+  <!-- Barrido global (scan) aplicado al body -->
+  <div id="scanfx" aria-hidden="true"></div>
+
+  <main class="container">
+    <header class="">
+      <h1>Panel de Administración — MySQL (Procedimientos)</h1>
+      <p class="muted">Interfaz para ejecutar procedimientos almacenados (CRUD) en las tablas existentes.</p>
+    </header>
+
+    <section class="card">
+      <div class="row">
+        <label for="admin_password">Clave administrador</label>
+        <input id="admin_password" type="password" placeholder="Introduce la clave de administrador (requerida)" />
+      </div>
+
+      <div class="row">
+        <label for="table_select">Seleccionar tabla a administrar</label>
+        <select id="table_select">
+          <option value="">-- elige una tabla --</option>
+          <option value="usuarios">usuarios</option>
+          <option value="tipo_usuario">tipo_usuario</option>
+          <option value="sectores">sectores</option>
+          <option value="plazas">plazas</option>
+          <option value="camaras">camaras</option>
+          <option value="tipos_reportes">tipos_reportes</option>
+          <option value="tipos_eventos">tipos_eventos</option>
+          <option value="reportes">reportes</option>
+          <option value="reportes_plazas">reportes_plazas</option>
+          <option value="reportes_camaras">reportes_camaras</option>
+          <option value="accesos_usuarios">accesos_usuarios</option>
+          <option value="eventos_camara">eventos_camara</option>
+        </select>
+      </div>
+
+      <div id="dynamic_form" class="form-grid">
+        <p class="muted">Selecciona una tabla para mostrar los campos.</p>
+      </div>
+
+      <div class="actions">
+        <button id="btn_list" class="btn-led">Ver todos</button>
+        <button id="btn_get" class="btn-led">Ver (por id)</button>
+        <button id="btn_create" class="btn-led">Agregar</button>
+        <button id="btn_update" class="btn-led">Editar</button>
+        <button id="btn_delete" class="btn-led">Eliminar (por id)</button>
+      </div>
+
+      <div id="message" class="message" aria-live="polite"></div>
+    </section>
+
+    <section class="card">
+      <h2>Resultados</h2>
+      <div id="results_area" class="results_area"></div>
+    </section>
+
+    <footer class="small muted">
+      <p>Nota: Esta interfaz asume procedimientos almacenados en la BD. Revisa <code>app.py</code>.</p>
+    </footer>
+  </main>
+
+  <script>
+    /* ==========================
+       Loader + core de animación
+       ========================== */
+    (function () {
+      const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const minShow = prefersReduced ? 900 : 1400; // loader visible mínimo
+
+      const start = Date.now();
+      function readyUp() {
+        const elapsed = Date.now() - start;
+        const wait = Math.max(0, minShow - elapsed);
+        setTimeout(() => {
+          // 1) aparece el logo (body.ready)
+          document.body.classList.add('ready');
+          document.getElementById('loader')?.classList.add('hide');
+
+          // 2) activar barrido global del body
+          document.body.classList.add('scan-start');
+
+          // 3) 1s después, mostrar el container (contenido)
+          setTimeout(() => {
+            document.body.classList.add('content-ready');
+            // quitar preload al final para permitir transiciones
+            setTimeout(() => document.body.classList.remove('preload'), 60);
+          }, 1000);
+        }, wait);
+      }
+
+      if (document.readyState === 'complete') readyUp();
+      else window.addEventListener('load', readyUp);
+    })();
+
+    /* ==========================
+       Lógica CRUD
+       ========================== */
+    const TABLES = {
+      "usuarios": { id: "id_usuario", fields: ["nombre_usuario","contrasena_hash","nombre_completo","correo","id_tipo_usuario","telefono"] },
+      "tipo_usuario": { id: "id_tipo_usuario", fields: ["nombre","descripcion"] },
+      "sectores": { id: "id_sector", fields: ["nombre","descripcion"] },
+      "plazas": { id: "id_plaza", fields: ["nombre","id_sector","direccion","latitud","longitud"] },
+      "camaras": { id: "id_camara", fields: ["id_plaza","numero_serie","modelo","direccion_ip","fecha_instalacion"] },
+      "tipos_reportes": { id: "id_tipo_reporte", fields: ["codigo","nombre","descripcion"] },
+      "tipos_eventos": { id: "id_tipo_evento", fields: ["codigo","nombre","descripcion"] },
+      "reportes": { id: "id_reporte", fields: ["id_tipo_reporte","reportado_por","descripcion_reporte","fecha_hora_reporte","nivel_gravedad"] },
+      "reportes_plazas": { id: ["id_reporte","id_plaza"], fields: ["especificacion"] },
+      "reportes_camaras": { id: ["id_reporte","id_camara"], fields: ["especificacion"] },
+      "accesos_usuarios": { id: "id_acceso", fields: ["id_usuario","id_plaza","otorgado_por","fecha_otorgado","revocado_por","fecha_revocado","activo"] },
+      "eventos_camara": { id: "id_evento", fields: ["id_camara","id_tipo_evento","descripcion_evento","fecha_hora_evento","nivel_confianza"] }
+    };
+
+    const tableSelect = document.getElementById('table_select');
+    const dynamicForm = document.getElementById('dynamic_form');
+    const messageDiv = document.getElementById('message');
+    const resultsArea = document.getElementById('results_area');
+    const adminPasswordInput = document.getElementById('admin_password');
+
+    function clearMessage() { messageDiv.textContent = ''; messageDiv.className = 'message'; }
+    function showMessage(text, type = 'info') {
+      messageDiv.textContent = text;
+      messageDiv.className = 'message ' + type;
+    }
+
+    function createFieldInput(name) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'field';
+      const label = document.createElement('label');
+      label.textContent = name;
+      label.htmlFor = 'f_' + name;
+      const input = document.createElement('input');
+      input.id = 'f_' + name;
+      input.name = name;
+      input.placeholder = name;
+      if (name.match(/(^id_|_id$|^id[0-9]|id_)/i) || name.match(/id$/i) || name.match(/nivel|activo|telefono/i)) {
+        input.type = 'number';
+      } else if (name.match(/fecha|hora|_at|date|datetime/i)) {
+        input.type = 'datetime-local';
+      } else {
+        input.type = 'text';
+      }
+      wrapper.appendChild(label); wrapper.appendChild(input);
+      return wrapper;
+    }
+
+    function renderFormForTable(tableKey) {
+      dynamicForm.innerHTML = '';
+      clearMessage(); resultsArea.innerHTML = '';
+      if (!tableKey) { dynamicForm.innerHTML = '<p class="muted">Selecciona una tabla para mostrar los campos.</p>'; return; }
+
+      const meta = TABLES[tableKey];
+      const title = document.createElement('h3');
+      title.textContent = 'Campos — ' + tableKey;
+      dynamicForm.appendChild(title);
+
+      const idFields = Array.isArray(meta.id) ? meta.id : [meta.id];
+      const idSection = document.createElement('div');
+      idSection.className = 'id-section';
+      idSection.innerHTML = '<h4>ID (para ver/editar/eliminar)</h4>';
+      idFields.forEach(idName => {
+        const idInput = document.createElement('div');
+        idInput.className = 'field';
+        const label = document.createElement('label');
+        label.textContent = idName;
+        label.htmlFor = 'f_' + idName;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.id = 'f_' + idName;
+        input.name = idName;
+        input.placeholder = idName;
+        idInput.appendChild(label);
+        idInput.appendChild(input);
+        idSection.appendChild(idInput);
+      });
+      dynamicForm.appendChild(idSection);
+
+      const fieldsDiv = document.createElement('div');
+      fieldsDiv.className = 'fields-section';
+      fieldsDiv.innerHTML = '<h4>Campos (para crear/editar)</h4>';
+      meta.fields.forEach(fieldName => fieldsDiv.appendChild(createFieldInput(fieldName)));
+      dynamicForm.appendChild(fieldsDiv);
+
+      const note = document.createElement('p');
+      note.className = 'muted';
+      note.textContent = 'Rellena los campos necesarios. Para crear: completar campos y presionar "Agregar". Para editar: completar el id y los campos a actualizar, presionar "Editar".';
+      dynamicForm.appendChild(note);
+    }
+
+    function buildPayload(tableKey) {
+      const meta = TABLES[tableKey];
+      const payload = {};
+      const idFields = Array.isArray(meta.id) ? meta.id : [meta.id];
+      idFields.forEach(idName => {
+        const el = document.getElementById('f_' + idName);
+        if (el) payload[idName] = el.value || null;
+      });
+      meta.fields.forEach(name => {
+        const el = document.getElementById('f_' + name);
+        if (el) {
+          payload[name] = (el.type === 'datetime-local' && el.value) ? el.value.replace('T', ' ') : (el.value || null);
+        }
+      });
+      return payload;
+    }
+
+    function renderResults(rows) {
+      resultsArea.innerHTML = '';
+      if (!rows || rows.length === 0) {
+        resultsArea.innerHTML = '<p class="muted">Sin resultados.</p>';
+        return;
+      }
+      const table = document.createElement('table');
+      table.className = 'results-table';
+      const thead = document.createElement('thead');
+      const headerRow = document.createElement('tr');
+      Object.keys(rows[0]).forEach(k => {
+        const th = document.createElement('th'); th.textContent = k; headerRow.appendChild(th);
+      });
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        Object.keys(r).forEach(k => {
+          const td = document.createElement('td');
+          td.textContent = (r[k] === null || typeof r[k] === 'undefined') ? '' : String(r[k]);
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      resultsArea.appendChild(table);
+    }
+
+    async function callBackend(operation, tableKey) {
+      clearMessage();
+      const admin_password = adminPasswordInput.value || '';
+      if (!admin_password) { showMessage('Clave administrador obligatoria.', 'error'); return; }
+      const payload = buildPayload(tableKey);
+      const body = { admin_password, operation, table: tableKey, payload };
+
+      showMessage('Procesando...', 'info');
+      try {
+        const resp = await fetch('/procesar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const result = await resp.json();
+        if (!resp.ok) { showMessage(result.message || 'Error inesperado', 'error'); return; }
+        if (result.success) {
+          showMessage(result.message || 'Operación exitosa', 'success');
+          if (result.data) renderResults(result.data);
+          else if (result.rows) renderResults(result.rows);
+        } else { showMessage(result.message || 'Operación fallida', 'error'); }
+      } catch (err) {
+        showMessage('Error de conexión: ' + err.message, 'error');
+      }
+    }
+
+    tableSelect.addEventListener('change', (e) => renderFormForTable(e.target.value));
+    document.getElementById('btn_list').addEventListener('click', () => { const t = tableSelect.value; if (!t) { showMessage('Selecciona una tabla primero', 'error'); return; } callBackend('list', t); });
+    document.getElementById('btn_get').addEventListener('click', () => { const t = tableSelect.value; if (!t) { showMessage('Selecciona una tabla primero', 'error'); return; } callBackend('get', t); });
+    document.getElementById('btn_create').addEventListener('click', () => { const t = tableSelect.value; if (!t) { showMessage('Selecciona una tabla primero', 'error'); return; } callBackend('create', t); });
+    document.getElementById('btn_update').addEventListener('click', () => { const t = tableSelect.value; if (!t) { showMessage('Selecciona una tabla primero', 'error'); return; } callBackend('update', t); });
+    document.getElementById('btn_delete').addEventListener('click', () => { const t = tableSelect.value; if (!t) { showMessage('Selecciona una tabla primero', 'error'); return; } callBackend('delete', t); });
+
+    renderFormForTable('');
+  </script>
+</body>
+</html>
