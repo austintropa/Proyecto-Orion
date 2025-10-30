@@ -1,1 +1,1 @@
-# Proyecto-Orion
+# Proyecto-Orion es un proyecto propio en donde configure una base de datos con MySQL, mezcle mis Diseños de Pagina con Html y Css y usando Flask logre crear esta pagina de control de datos, para ver como realmente funciona hay que descargarlo y correr la base de datos dentro de tu dispositivo
